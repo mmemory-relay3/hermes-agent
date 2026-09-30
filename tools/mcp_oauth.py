@@ -605,9 +605,13 @@ class HermesTokenStorage:
         return snap
 
     def restore(self, snapshot: dict[str, bytes], *, only_if_absent: bool = False) -> None:
-        """Revert to a snapshot without overwriting a concurrent successful write."""
-        if only_if_absent and any(path.exists() for path in self._state_paths()):
-            logger.info("Skipping OAuth rollback for %s because newer state exists", self._server_name)
+        """Revert a failed login without overwriting a concurrently committed token.
+
+        Discovery and pre-registration write client/metadata files before consent;
+        those files alone are not a successful grant and must not suppress rollback.
+        """
+        if only_if_absent and self.has_cached_tokens():
+            logger.info("Skipping OAuth rollback for %s because newer tokens exist", self._server_name)
             return
         self.remove()
         if not snapshot:

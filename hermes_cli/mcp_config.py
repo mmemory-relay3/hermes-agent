@@ -850,8 +850,9 @@ def cmd_mcp_test(args):
 def _reauth_oauth_server(name: str, server_config: dict, *, flow: str | None = None) -> bool:
     """Force a fresh OAuth flow for one server. Returns True on success.
 
-    Browser login clears cached state and re-probes. Device login replaces state only after
-    approval. Both verify a token landed. Shared by ``login`` and ``reauth``.
+    Browser login snapshots and clears cached state before probing; failure restores it.
+    Device login replaces state only after approval. Both verify a token landed.
+    Shared by ``login`` and ``reauth``.
     """
     url = server_config.get("url")
     if not url:
@@ -867,6 +868,8 @@ def _reauth_oauth_server(name: str, server_config: dict, *, flow: str | None = N
     if selected_flow not in {"browser", "device"}:
         _error("oauth.flow must be browser or device")
         return False
+    saved_state = None
+    authenticated = False
     try:
         from tools.mcp_oauth_manager import get_manager
         if selected_flow == "browser":
@@ -876,13 +879,14 @@ def _reauth_oauth_server(name: str, server_config: dict, *, flow: str | None = N
             # the announced authorize URL off the SDK's `{mcp-origin}/authorize` guess (#115329).
             from tools.mcp_oauth import HermesTokenStorage
             mgr = get_manager()
-            mgr.evict(name)
+            storage = HermesTokenStorage(name)
+            saved_state = (storage, storage.snapshot(), mgr, mgr.evict(name))
             # Force the OAuth flow even when the server answers ``initialize`` with 200 and
             # no challenge (gmailmcp.googleapis.com, Blynk — #53870): without this one-shot
             # flag the SDK's reactive 401 branch never fires and login ends with
             # "no OAuth token was obtained" despite the server supporting OAuth.
             mgr.set_force_oauth(name)
-            HermesTokenStorage(name).remove(keep_metadata=True)
+            storage.remove(keep_metadata=True)
     except Exception as exc:
         _warning(f"Could not clear existing OAuth state: {exc}")
 
@@ -931,6 +935,7 @@ def _reauth_oauth_server(name: str, server_config: dict, *, flow: str | None = N
             _success(f"Authenticated — {len(tools)} tool(s) available")
         else:
             _success("Authenticated (server reported no tools)")
+        authenticated = True
         return True
     except Exception as exc:
         try:
@@ -940,6 +945,11 @@ def _reauth_oauth_server(name: str, server_config: dict, *, flow: str | None = N
             humanized = None
         _error(f"Authentication failed: {redact_mcp_probe_text(humanized or exc)}")
         return False
+    finally:
+        if saved_state is not None and not authenticated:
+            storage, backup, mgr, previous_entry = saved_state
+            storage.restore(backup, only_if_absent=True)
+            mgr.restore_entry(name, previous_entry)
 
 
 def cmd_mcp_login(args):
