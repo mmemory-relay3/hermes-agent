@@ -339,6 +339,12 @@ Behavior:
 - Only applies to HTTP/StreamableHTTP transport (`url`-based servers)
 - Under a [multiplexed gateway](../user-guide/multi-profile-gateways.md), an OAuth connection is never shared across profiles: each profile authenticates with its own token and opens its own connection, even when the `mcp_servers` entries are identical
 
+For browser login, a non-empty `oauth.scope` limits the scopes in the authorization
+request: discovery and scope step-up do not add permissions beyond that configured
+value. Without `oauth.scope`, Hermes uses the SDK's scope negotiation. Changing this
+setting does not narrow an already-issued token; authenticate again and check the
+permissions granted by the provider.
+
 ### Device-code login (RFC 8628)
 
 For an authorization server advertising `device_authorization_endpoint`, explicitly choose

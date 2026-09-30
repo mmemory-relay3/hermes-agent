@@ -86,15 +86,21 @@ class HermesProviderMixin:
     - Any 2xx token/refresh response is accepted; token bodies never leak into errors/logs."""
 
     _hermes_logger: logging.Logger = logger
+    _hermes_configured_scope: str | None = None
 
     def __init__(self, *args: Any, token_user_agent: str | None = None, oauth_flow: str = "browser", **kwargs: Any):
         super().__init__(*args, **kwargs)
+        self._hermes_configured_scope = self.context.client_metadata.scope
         self._hermes_oauth_flow = oauth_flow
         # oauth.user_agent — stamped onto token-endpoint requests only; some authorization servers/WAFs
         # reject httpx's default (#75576).
         self._hermes_token_user_agent = token_user_agent
 
     async def _perform_authorization(self):
+        # The SDK overwrites client_metadata.scope during discovery and step-up.
+        # An explicit oauth.scope is the user's limit, not a negotiation hint (#2317).
+        if self._hermes_configured_scope:
+            self.context.client_metadata.scope = self._hermes_configured_scope
         info = self.context.client_info
         grants = getattr(info, "grant_types", None) or []
         if (getattr(self, "_hermes_oauth_flow", "browser") == "device"
