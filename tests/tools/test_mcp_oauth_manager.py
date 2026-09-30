@@ -928,14 +928,38 @@ async def test_refresh_400_recovery_rejects_disk_pair_from_another_issuer(tmp_pa
 # ---------------------------------------------------------------------------
 
 
+def test_force_oauth_is_one_shot_and_isolated_by_profile_home(tmp_path, monkeypatch):
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from tools.mcp_oauth_manager import MCPOAuthManager
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "launch"))
+    _set_interactive_stdin(monkeypatch)
+    manager = MCPOAuthManager()
+    profile_a, profile_b = tmp_path / "a", tmp_path / "b"
+    token = set_hermes_home_override(profile_a)
+    try:
+        manager.set_force_oauth("shared")
+    finally:
+        reset_hermes_home_override(token)
+
+    for home, expected in ((profile_b, False), (profile_a, True), (profile_a, False)):
+        token = set_hermes_home_override(home)
+        try:
+            provider = manager.get_or_build_provider("shared", "https://mcp.example/mcp", {})
+            assert provider._force_oauth is expected
+            manager.evict("shared")
+        finally:
+            reset_hermes_home_override(token)
+
+
 def test_set_force_oauth_adds_name_to_set():
-    """set_force_oauth() adds the server name to _force_oauth_names."""
+    """set_force_oauth() adds the scoped server key to _force_oauth_names."""
     from tools.mcp_oauth_manager import MCPOAuthManager
 
     mgr = MCPOAuthManager()
-    assert "blynk" not in mgr._force_oauth_names
+    assert mgr._key("blynk") not in mgr._force_oauth_names
     mgr.set_force_oauth("blynk")
-    assert "blynk" in mgr._force_oauth_names
+    assert mgr._key("blynk") in mgr._force_oauth_names
 
 
 def test_build_provider_sets_force_oauth_flag(tmp_path, monkeypatch):
@@ -950,7 +974,7 @@ def test_build_provider_sets_force_oauth_flag(tmp_path, monkeypatch):
     assert provider is not None
     assert provider._force_oauth is True
     # Name should be consumed (one-shot)
-    assert "srv" not in mgr._force_oauth_names
+    assert mgr._key("srv") not in mgr._force_oauth_names
 
 
 def test_build_provider_without_force_oauth_flag(tmp_path, monkeypatch):

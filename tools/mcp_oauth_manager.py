@@ -299,13 +299,13 @@ class MCPOAuthManager:
         self._entries_lock = threading.Lock()
         # Strong refs to in-flight 401 tasks so the loop's weak bookkeeping cannot GC them mid-run.
         self._inflight_tasks: set[asyncio.Task] = set()
-        # Server names whose next built provider starts with ``_force_oauth = True``.
+        # Profile/server keys whose next built provider starts with ``_force_oauth = True``.
         # Populated by ``set_force_oauth()``, consumed and cleared one-shot by
         # ``_build_provider()`` — re-auth entry points use it to force the OAuth flow
         # for servers that answer ``initialize`` with 200 and never send a 401 challenge.
-        self._force_oauth_names: set[str] = set()
+        self._force_oauth_names: set[tuple[str, str]] = set()
 
-    def set_force_oauth(self, server_name: str) -> None:
+    def set_force_oauth(self, server_name: str, *, hermes_home: str | Path | None = None) -> None:
         """Mark *server_name* so the next provider built for it forces the OAuth flow.
 
         Called by the re-auth entry points (``hermes mcp login``, the dashboard
@@ -314,7 +314,7 @@ class MCPOAuthManager:
         unauthenticated ``initialize`` (#53870, #89412).
         """
         with self._entries_lock:
-            self._force_oauth_names.add(server_name)
+            self._force_oauth_names.add(self._key(server_name, hermes_home))
 
     def get_or_build_provider(self, server_name: str, server_url: str, oauth_config: Optional[dict]) -> Optional[Any]:
         """Cached OAuth provider for ``server_name``, built on first use (rebuilt when ``server_url`` changes);
@@ -356,8 +356,9 @@ class MCPOAuthManager:
                 f"Run `hermes mcp login {server_name}` interactively first to complete initial authorization.")
         # One-shot consumption: ``_build_provider`` runs under ``_entries_lock`` (from
         # ``get_or_build_provider``), so the read-discard pair cannot race another build.
-        force = server_name in self._force_oauth_names
-        self._force_oauth_names.discard(server_name)
+        key = self._key(server_name)
+        force = key in self._force_oauth_names
+        self._force_oauth_names.discard(key)
         return _HERMES_PROVIDER_CLS(
             server_name=server_name, preregistered=bool(cfg.get("client_id")), force_oauth=force,
             server_url=entry.server_url,
