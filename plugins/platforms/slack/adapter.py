@@ -286,11 +286,11 @@ def _sdk_supports_agent_sessions() -> bool:
 
 
 def _session_status_method(client: Any):
-    """Return the status setter: Agent Sessions API when available, else legacy."""
-    if _sdk_supports_agent_sessions():
-        method = getattr(client, "agents_sessions_setStatus", None)
-        if method is not None:
-            return method
+    """Keep free-text progress on the Assistant thread status API.
+
+    Agent Sessions status accepts lifecycle enums, not progress phrases or the
+    empty string used to clear typing. SDK availability is not compatibility.
+    """
     return client.assistant_threads_setStatus
 
 
