@@ -141,7 +141,7 @@ test('assertLocalProfileCanStart rejects a delayed retry after the profile direc
 })
 
 test('localProfilePoolKeys returns every local process scope for one profile', () => {
-  assert.deepEqual(localProfilePoolKeys('Selena'), ['selena', 'conn:local::selena'])
+  assert.deepEqual(localProfilePoolKeys('Selena'), ['selena', 'conn:local::selena', 'local-rest::selena'])
   assert.deepEqual(localProfilePoolKeys(''), [])
 })
 

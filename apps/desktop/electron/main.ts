@@ -266,6 +266,7 @@ import {
   stopFind
 } from './find-in-page'
 import { createFirstRunSetupGate } from './first-run-setup-gate'
+import { ensureForcedLocalBackend } from './forced-local-backend'
 import { registerFsIpc } from './fs-ipc'
 import type {
   GatewayFileSaveContext,
@@ -11075,7 +11076,7 @@ async function ensureRegistryBackend(
   connectionId,
   profile,
   managedUpdateCorrelation = '',
-  opts: { passive?: boolean; spawnPriority?: LocalBackendSpawnPriority } = {}
+  opts: { passive?: boolean; spawnPriority?: LocalBackendSpawnPriority; unscopableRequest?: boolean } = {}
 ) {
   const spawnPriority = spawnPriorityFrom(opts.spawnPriority)
   const passive = Boolean(opts.passive)
@@ -11196,63 +11197,32 @@ async function ensureRegistryBackend(
       return ensureBackend(profile, { passive, spawnPriority })
     }
 
-    const stoppingLocal = poolStopper.inFlight(localRoute.poolKey)
-
-    if (stoppingLocal) {
-      await stoppingLocal
-    }
-
-    const existingLocal = backendPool.get(localRoute.poolKey)
-
-    if (existingLocal) {
-      if (!passive) {
-        existingLocal.lastActiveAt = Date.now()
+    return ensureForcedLocalBackend(
+      {
+        pool: backendPool,
+        isolated: ISOLATED_BACKEND,
+        inFlightStop: key => poolStopper.inFlight(key),
+        promote: promotePoolEntry,
+        assertNotPassiveSpawn,
+        evictLru: () => evictLruPoolBackends(poolMaxBackends() - 1),
+        staleAfterWait: key => readDesktopConnectionsRegistry() !== registry || Boolean(backendPool.get(key)),
+        retry: (): Promise<any> => ensureRegistryBackend(connectionId, profile, managedUpdateCorrelation, opts),
+        spawn: (spawnProfile, entry, spawnOpts) =>
+          spawnPoolBackend(spawnProfile, entry, { forceLocal: true, ...spawnOpts }),
+        onSpawnFailure: async (label, error, key, entry) => {
+          logPoolSpawnFailure(label, error)
+          await teardownFailedLocalBackend(key, entry)
+        },
+        armReaper: startPoolIdleReaper
+      },
+      {
+        profileKey,
+        profilePoolKey: localRoute.poolKey,
+        passive,
+        spawnPriority,
+        unscopableRequest: opts.unscopableRequest
       }
-
-      if (spawnPriority === 'foreground') {
-        promotePoolEntry(existingLocal)
-      }
-
-      return existingLocal.connectionPromise
-    }
-
-    assertNotPassiveSpawn(passive, localRoute.poolKey)
-    await evictLruPoolBackends(poolMaxBackends() - 1)
-
-    // The registry may have changed while we waited for an eviction. Never
-    // start a child from a removed or edited connection's old descriptor.
-    if (readDesktopConnectionsRegistry() !== registry || backendPool.get(localRoute.poolKey)) {
-      return ensureRegistryBackend(connectionId, profile, managedUpdateCorrelation, opts)
-    }
-
-    const localEntry = {
-      process: null,
-      port: null,
-      token: null,
-      connectionPromise: null,
-      lastActiveAt: Date.now(),
-      remoteBaseUrl: null,
-      releaseLocalBackendSlot: null,
-      localBackendSlotKey: null,
-      localBackendSpawnRequest: null,
-      spawnPriority
-    }
-
-    localEntry.connectionPromise = spawnPoolBackend(profileKey, localEntry, {
-      forceLocal: true,
-      poolKey: localRoute.poolKey
-    }).catch(async error => {
-      // Same trace rule as the v1 pool path: a forced-local child whose spawn
-      // rejects before the child exists must still land in desktop.log.
-      logPoolSpawnFailure(`"${profileKey}" (forced-local)`, error)
-
-      await teardownFailedLocalBackend(localRoute.poolKey, localEntry)
-      throw error
-    })
-    backendPool.set(localRoute.poolKey, localEntry)
-    startPoolIdleReaper()
-
-    return localEntry.connectionPromise
+    )
   }
 
   const key = backendScopeKey(id, profile)
@@ -12010,6 +11980,11 @@ function startPoolIdleReaper() {
     const now = Date.now()
 
     for (const [profile, entry] of [...backendPool.entries()]) {
+      // The local host backend hosts every profile's cron and bot work.
+      if (entry.pinned) {
+        continue
+      }
+
       // Remote descriptors hold no child/slot. Local children require the
       // same admission authority as foreground and LRU reclamation.
       // Pinned-tier TTL (#105239): the keepalive refreshes lastActiveAt for
@@ -17485,9 +17460,19 @@ async function pooledRegistrySessionSources(includeLocal = false): Promise<Regis
 
     const backends: Array<{ descriptor: unknown; profileLabel: null | string }> = []
 
-    const perProfile = connection.kind === 'ssh' || (includeLocal && connection.kind === 'local')
+    // The pinned local host serves EVERY local profile (forcedLocalBackend): it is a shared host,
+    // read once cross-profile like a shared remote. Only escape-hatch children (isolated backends)
+    // still run as one profile each.
+    const sharedLocalHost =
+      includeLocal && connection.kind === 'local' && pooled.some(([, entry]) => entry.pinned === true)
 
-    for (const [key, entry] of perProfile ? pooled : pooled.slice(0, 1)) {
+    const perProfile = !sharedLocalHost && (connection.kind === 'ssh' || (includeLocal && connection.kind === 'local'))
+
+    for (const [key, entry] of perProfile
+      ? pooled
+      : sharedLocalHost
+        ? pooled.filter(([, e]) => e.pinned)
+        : pooled.slice(0, 1)) {
       try {
         // Already-resolved for a connected backend; a still-dialing entry is
         // skipped via the timeout guard rather than blocking the sidebar.
@@ -17506,7 +17491,9 @@ async function pooledRegistrySessionSources(includeLocal = false): Promise<Regis
     }
 
     if (backends.length) {
-      sources.push({ backends, connectionId: connection.id, kind: connection.kind })
+      // 'local-shared': one host serving every local profile (read cross-profile, rows keep their own
+      // profile tag). Plain 'local' stays the one-profile-per-backend shape.
+      sources.push({ backends, connectionId: connection.id, kind: sharedLocalHost ? 'local-shared' : connection.kind })
     }
   }
 
@@ -17526,11 +17513,16 @@ async function dispatchRegistryApiRequest(
   // OUT of the claim: an interactive open coalescing onto an in-flight
   // passive read would otherwise inherit its "no warm backend" rejection.
   const spawnPriority = spawnPriorityFrom(request?.priority)
+  // A mutation the server cannot profile-scope keeps a process whose own home
+  // is the profile (forcedLocalBackend); it must not coalesce onto, or be
+  // served by, the shared host's dial for the same scope.
+  const unscopableRequest = unscopableMutatingRequest({ requestMethod: request?.method, requestPath: request?.path })
+  const dialKey = `${backendScopeKey(registryConnectionId, routeProfile)}${unscopableRequest ? '\u0000rest' : ''}`
 
   const connection: any = request?.passive
-    ? await ensureRegistryBackend(registryConnectionId, routeProfile, '', { passive: true })
-    : await backendDialClaims.run(backendScopeKey(registryConnectionId, routeProfile), () =>
-        ensureRegistryBackend(registryConnectionId, routeProfile, '', { spawnPriority })
+    ? await ensureRegistryBackend(registryConnectionId, routeProfile, '', { passive: true, unscopableRequest })
+    : await backendDialClaims.run(dialKey, () =>
+        ensureRegistryBackend(registryConnectionId, routeProfile, '', { spawnPriority, unscopableRequest })
       )
 
   const requestPath = pathForRegistryBackendRequest(request.path, requestProfile, connection)

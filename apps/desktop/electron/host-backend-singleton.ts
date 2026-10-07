@@ -49,6 +49,69 @@ export function sharesHostBackend(opts: HostBackendCollapseOptions = {}): boolea
   return !opts.profileRemoteOverride && !opts.primaryRemoteActive
 }
 
+/**
+ * Pool key of the one local host backend a remote-primary Desktop runs for
+ * "This device" (the registry composite `conn:local::<profile>` form, so it
+ * never collides with the v1 route's remote descriptor at the bare key).
+ */
+export const LOCAL_HOST_POOL_KEY = 'conn:local::default'
+
+/**
+ * Pool-key prefix of the process-scoped backend an unscopable mutating REST
+ * call keeps. Outside the `conn:local::` namespace on purpose: the registry's
+ * per-connection enumerations (session sources, roster, retirement parking)
+ * must never mistake it for the profile's chat scope on the host backend.
+ */
+export const UNSCOPABLE_REST_POOL_PREFIX = 'local-rest::'
+
+/**
+ * Which local backend serves a forced-local profile ("This device" while the
+ * primary is remote). Every profile shares the one host backend and is scoped
+ * per socket/request exactly like a local primary; only the escape hatches of
+ * `sharesHostBackend` keep a backend of the profile's own. The host is pinned:
+ * no idle or LRU retirement, it hosts cron and bot work nobody is watching.
+ */
+export function forcedLocalBackend(
+  profile: string,
+  profilePoolKey: string,
+  {
+    isolated = false,
+    unscopableRequest = false
+  }: Pick<HostBackendCollapseOptions, 'isolated' | 'unscopableRequest'> = {}
+): { pinned: boolean; poolKey: string; spawnProfile: string } {
+  if (isolated) {
+    return { pinned: false, poolKey: profilePoolKey, spawnProfile: profile }
+  }
+
+  // The host launches as `default`, so its own HERMES_HOME already scopes a
+  // default-profile mutation; every other profile needs a process of its own.
+  if (unscopableRequest && profile !== 'default') {
+    return { pinned: false, poolKey: `${UNSCOPABLE_REST_POOL_PREFIX}${profile}`, spawnProfile: profile }
+  }
+
+  return { pinned: true, poolKey: LOCAL_HOST_POOL_KEY, spawnProfile: 'default' }
+}
+
+/**
+ * The host backend's descriptor as `profile` sees it: the socket names its
+ * profile (`/api/ws?profile=`, the backend's per-socket default) and REST
+ * scoping reads `profile` like any shared local backend.
+ */
+export function scopeHostDescriptor<T extends { wsUrl?: string }>(
+  connection: T,
+  profile: string
+): T & { profile: string } {
+  // `default` is the host's launch profile: its socket stays unscoped, as a local primary's does.
+  if (!connection.wsUrl || profile === 'default') {
+    return { ...connection, profile }
+  }
+
+  const url = new URL(connection.wsUrl)
+  url.searchParams.set('profile', profile)
+
+  return { ...connection, profile, wsUrl: url.toString() }
+}
+
 /** Raised when something still tries to start a second local backend. */
 export class SecondLocalBackendError extends Error {
   readonly poolKey: string

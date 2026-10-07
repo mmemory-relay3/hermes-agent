@@ -11,6 +11,8 @@ export interface PoolRetireEntry {
    * predates the stamp and keeps the legacy lastActiveAt clock.
    */
   lastStreamedAt?: null | number
+  /** The one local host backend: it serves every profile and their cron/bot work, never a retirement candidate. */
+  pinned?: boolean
   process?: unknown
 }
 
@@ -30,7 +32,7 @@ export function selectRetirementCandidates<K, E extends PoolRetireEntry>(
   exclude: ReadonlySet<K>
 ): [K, E][] {
   return [...entries]
-    .filter(([key, entry]) => Boolean(entry.process) && entry.activeTurn !== true && !exclude.has(key))
+    .filter(([key, entry]) => Boolean(entry.process) && entry.activeTurn !== true && !entry.pinned && !exclude.has(key))
     .sort((a, b) => (a[1].lastActiveAt || 0) - (b[1].lastActiveAt || 0))
 }
 
@@ -58,7 +60,8 @@ export function createPoolRetirer<E extends PoolRetireEntry>(deps: PoolRetirerDe
     !disposed && deps.coordinator.foregroundWaiters.size > 0 && deps.coordinator.activeCount >= deps.coordinator.limit
 
   async function retire(key: string, entry: E, needed: () => boolean): Promise<boolean> {
-    const eligible = () => !disposed && deps.pool.get(key) === entry && entry.activeTurn !== true && needed()
+    const eligible = () =>
+      !disposed && deps.pool.get(key) === entry && entry.activeTurn !== true && !entry.pinned && needed()
 
     if (!entry.process || !eligible()) {
       return false

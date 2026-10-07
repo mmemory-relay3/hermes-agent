@@ -69,12 +69,13 @@ test('idle and LRU retirement require backend authority, unchanged identity and 
   }
 })
 
-test('candidate selection excludes processless descriptors, renderer-leased work and queued target scopes', () => {
+test('candidate selection excludes processless descriptors, renderer-leased work, the pinned host and queued target scopes', () => {
   const pool = new Map<string, PoolRetireEntry>([
     ['fresh', { process: {}, lastActiveAt: 100 }],
     ['old', { process: {}, lastActiveAt: 1 }],
     ['busy', { process: {}, lastActiveAt: 0, activeTurn: true }],
     ['descriptor', { process: null }],
+    ['host', { process: {}, lastActiveAt: 0, pinned: true }],
     ['target', { process: {}, lastActiveAt: 0 }]
   ])
 

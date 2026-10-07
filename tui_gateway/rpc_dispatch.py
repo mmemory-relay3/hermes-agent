@@ -29,6 +29,7 @@ def _handle_admitted_request(req: dict) -> dict | None:
         params, problem = _contracts.validate_params(contract, params)
         if problem is not None:
             return _err(rid, 4000, problem)
+        params = _socket_profile_params(contract, params)
     token = _current_rpc_method.set(method)
     try:
         response = fn(rid, params)
@@ -40,6 +41,18 @@ def _handle_admitted_request(req: dict) -> dict | None:
         _contracts.check_params_accepted(contract, params)
         _contracts.check_result(contract, response["result"])
     return response
+
+
+def _socket_profile_params(contract, params: dict) -> dict:
+    """A socket opened as ``/api/ws?profile=<p>`` speaks for profile ``p`` on a backend that serves
+    several (one host backend behind a remote-primary Desktop's "This device" profiles): ``p`` is the
+    default ``profile`` of every method that accepts one, as if this process had launched as ``p``.
+    An explicit ``profile`` wins, and a live session keeps its own ``profile_home``."""
+    profile = getattr(current_transport(), "default_profile", None)
+    if (not profile or "profile" not in contract.params.model_fields or params.get("profile")
+            or str(params.get("session_id") or "") in _sessions):
+        return params
+    return {**params, "profile": profile}
 
 
 def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:

@@ -207,7 +207,7 @@ export function localProfilePoolKeys(profile: unknown): string[] {
     .trim()
     .toLowerCase()
 
-  return key ? [key, `conn:local::${key}`] : []
+  return key ? [key, `conn:local::${key}`, `local-rest::${key}`] : []
 }
 
 /**

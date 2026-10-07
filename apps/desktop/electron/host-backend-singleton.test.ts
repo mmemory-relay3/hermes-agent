@@ -5,7 +5,14 @@ import assert from 'node:assert/strict'
 import { test } from 'vitest'
 
 import { resolveProfileBackendRoute, unscopableMutatingRequest } from './connection-config'
-import { assertNoSecondLocalBackend, SecondLocalBackendError, sharesHostBackend } from './host-backend-singleton'
+import {
+  assertNoSecondLocalBackend,
+  forcedLocalBackend,
+  LOCAL_HOST_POOL_KEY,
+  scopeHostDescriptor,
+  SecondLocalBackendError,
+  sharesHostBackend
+} from './host-backend-singleton'
 
 const LOCAL = { globalRemote: false, primaryProfile: 'default', profileRemoteOverride: false }
 
@@ -78,4 +85,31 @@ test('the spawn guard and the router agree on which requests keep a backend', ()
       `${requestMethod} ${requestPath}: guard and router disagree`
     )
   }
+})
+
+test('a remote primary still runs every "This device" profile on ONE pinned host backend, socket-scoped per profile', () => {
+  // The support case: remote primary + three local profiles spawned three
+  // pooled children, hit the 3-slot cap, and the idle reaper killed the
+  // active one. Every forced-local profile must land on one pinned key.
+  const routes = ['default', 'reviewer', 'calendar-demo'].map(profile =>
+    forcedLocalBackend(profile, `conn:local::${profile}`)
+  )
+
+  assert.deepEqual(new Set(routes.map(route => route.poolKey)), new Set([LOCAL_HOST_POOL_KEY]))
+  assert.ok(routes.every(route => route.pinned && route.spawnProfile === 'default'))
+
+  const host = { wsUrl: 'ws://127.0.0.1:5/api/ws?token=t', profile: 'default' }
+  assert.equal(new URL(scopeHostDescriptor(host, 'reviewer').wsUrl).searchParams.get('profile'), 'reviewer')
+  assert.equal(new URL(scopeHostDescriptor(host, 'default').wsUrl).searchParams.get('profile'), null)
+
+  // Escape hatches keep a process whose own HERMES_HOME is the profile, off the chat scope.
+  assert.deepEqual(forcedLocalBackend('reviewer', 'conn:local::reviewer', { unscopableRequest: true }), {
+    pinned: false,
+    poolKey: 'local-rest::reviewer',
+    spawnProfile: 'reviewer'
+  })
+  assert.equal(
+    forcedLocalBackend('reviewer', 'conn:local::reviewer', { isolated: true }).poolKey,
+    'conn:local::reviewer'
+  )
 })
