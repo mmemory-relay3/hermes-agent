@@ -747,27 +747,13 @@ function localPrimaryRequestScope(opts: ProfileRouteOptions): boolean | null {
     return true
   }
 
-  // Every current /api/tools handler accepts `profile`; every /api/profiles
-  // handler either aggregates profiles or names its target in the path/body.
-  // These are the only whole families safe to route through the primary.
-  if (pathname === '/api/tools' || pathname.startsWith('/api/tools/')) {
-    return true
-  }
-
+  // Every /api/profiles handler either aggregates profiles or names its target
+  // in the path/body, so the family never takes a `?profile=` scope.
   if (pathname === '/api/profiles' || pathname.startsWith('/api/profiles/')) {
     return false
   }
 
-  // Whole families whose every handler now takes `?profile=` and resolves the
-  // profile's home per request: webhook subscriptions (`{name}` in the path) and
-  // the /api/ops maintenance routes (doctor, backup/import, hooks, checkpoints,
-  // diagnostics). Their action spawns pass `-p <profile>` to the child, and the
-  // /api/actions poll family above already pins to this same backend.
-  if (pathname === '/api/webhooks' || pathname.startsWith('/api/webhooks/')) {
-    return true
-  }
-
-  if (pathname.startsWith('/api/ops/')) {
+  if (PROFILE_SCOPED_FAMILIES.some(family => pathname === family || pathname.startsWith(`${family}/`))) {
     return true
   }
 
@@ -783,6 +769,22 @@ function localPrimaryRequestScope(opts: ProfileRouteOptions): boolean | null {
 
   return null
 }
+
+/**
+ * Whole route families whose every handler takes `?profile=` and resolves the
+ * profile's home per request, so they ride the shared backend:
+ *  - /api/tools.
+ *  - /api/webhooks: subscriptions, `{name}` in the path.
+ *  - /api/ops: doctor, backup/import, hooks, checkpoints, diagnostics. Their
+ *    action spawns pass `-p <profile>` to the child, and the /api/actions poll
+ *    family pins to this same backend.
+ *  - /api/providers/oauth: start/poll/cancel/disconnect validate `profile` and
+ *    scope the token write to that home. A device-code session lives only in
+ *    the memory of the process that started it, so splitting start (a mutation)
+ *    from poll (a read) across two backends answers "Session not found or
+ *    expired" right after a successful start.
+ */
+const PROFILE_SCOPED_FAMILIES = ['/api/tools', '/api/webhooks', '/api/ops', '/api/providers/oauth']
 
 const SAFE_REQUEST_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 

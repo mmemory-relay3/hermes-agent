@@ -129,3 +129,36 @@ test('retireIdle honours the pinned-tier eligibility override while every other 
     assert.deepEqual(stopped, outcome === 'stale-streamed' ? ['pinned'] : [], outcome)
   }
 })
+
+test('LRU eviction counts only optional children: the pinned host holds no slot', async () => {
+  const pool = new Map<string, PoolRetireEntry>([
+    ['host', { process: {}, lastActiveAt: 0, pinned: true }],
+    ['a', { process: {}, lastActiveAt: 1 }],
+    ['b', { process: {}, lastActiveAt: 2 }]
+  ])
+
+  const stopped: string[] = []
+
+  const retirer = createPoolRetirer({
+    pool,
+    coordinator: new LocalBackendSpawnCoordinator(3),
+    prepare: async () => 'permit',
+    commit: async () => true,
+    cancel: async () => undefined,
+    stopBackend: async key => {
+      stopped.push(key)
+      pool.delete(key)
+    }
+  })
+
+  try {
+    // maxBackends 3, making room for one more child: keep 2. Two optional children fit.
+    await retirer.evictTo(2, 0)
+    assert.deepEqual(stopped, [])
+    await retirer.evictTo(1, 0)
+    assert.deepEqual(stopped, ['a'])
+    assert.ok(pool.has('host'))
+  } finally {
+    retirer.dispose()
+  }
+})

@@ -177,7 +177,10 @@ export function createPoolRetirer<E extends PoolRetireEntry>(deps: PoolRetirerDe
     evictTo: (keep: number, freshMs: number) =>
       enqueue(async () => {
         const retired: string[] = []
-        const overCap = () => [...deps.pool.values()].filter(entry => entry.process).length > Math.max(0, keep)
+
+        // The pinned host holds no spawn slot, so it is not part of the budget being enforced.
+        const overCap = () =>
+          [...deps.pool.values()].filter(entry => entry.process && !entry.pinned).length > Math.max(0, keep)
 
         for (const [key, entry] of selectRetirementCandidates(deps.pool, deps.coordinator.foregroundWaiters)) {
           if (await retire(key, entry, () => overCap() && Date.now() - (entry.lastActiveAt || 0) > freshMs)) {

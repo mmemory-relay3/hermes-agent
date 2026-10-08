@@ -49,6 +49,7 @@ import {
   savedProfileSsh,
   tokenPreview,
   translateSelfProfileQuery,
+  unscopableMutatingRequest,
   withTransientRetries
 } from './connection-config'
 import { mintGatewayWsTicket } from './oauth-rest-request'
@@ -1605,5 +1606,19 @@ test('FIX #95701: transport and server failures at the ticket mint stay retryabl
     assert.equal(wrapped.message, 'transport copy')
     assert.equal(wrapped.needsOauthLogin, undefined)
     assert.equal(wrapped.isReauthRequired, undefined)
+  }
+})
+
+test('provider OAuth start and poll stay on one backend: the device-code session is process-local', () => {
+  // POST start was "unscopable", so a forced-local profile started the flow in a
+  // `local-rest::<p>` child while the GET poll asked the shared host, which
+  // answered "Session not found or expired". Every handler takes `?profile=`.
+  for (const [method, path] of [
+    ['POST', '/api/providers/oauth/nous/start'],
+    ['GET', '/api/providers/oauth/nous/poll/s1'],
+    ['DELETE', '/api/providers/oauth/sessions/s1'],
+    ['DELETE', '/api/providers/oauth/nous']
+  ]) {
+    assert.equal(unscopableMutatingRequest({ requestMethod: method, requestPath: path }), false, `${method} ${path}`)
   }
 })
