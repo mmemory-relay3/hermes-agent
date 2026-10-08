@@ -548,6 +548,29 @@ def _attach_worker(sid: str, session: dict, worker) -> None:
 _closed_session_activity: dict[str, float] = {}
 
 
+def close_sessions_under(directory) -> int:
+    """Close every live session whose ``profile_home`` is ``directory`` (profile delete on a backend hosting
+    several profiles). Same detach-then-teardown as ``session.close``, so a running turn settles through its
+    normal finalize path; ``session.reclaimed`` tells every client to drop the runtime. Returns the count."""
+    target = Path(directory).resolve()
+    with _sessions_lock:
+        sids = [sid for sid, s in _sessions.items()
+                if s.get("profile_home") and Path(s["profile_home"]).resolve() == target]
+    closed = 0
+    for sid in sids:
+        with _session_resume_lock:
+            session = _pop_session_by_id(sid)
+        if session is None:  # a concurrent close or reap already owns it
+            continue
+        stored_id = str(session.get("session_key") or "")
+        if _teardown_popped_session(session, end_reason="profile_deleted"):
+            closed += 1
+            with contextlib.suppress(Exception):
+                _broadcast_global_event("session.reclaimed", {
+                    "session_id": sid, "stored_session_id": stored_id, "reason": "profile_deleted"})
+    return closed
+
+
 def _pop_session_by_id(sid: str) -> dict | None:
     """Atomically detach one live session from the registry — the ownership claim for teardown (a concurrent
     close/reaper no-ops). Separate from ``_teardown_session``: slow finalization must not run under the resume lock."""

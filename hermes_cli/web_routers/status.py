@@ -525,6 +525,12 @@ async def get_status(profile: Optional[str] = None):
             "gateway_drainable": derive_gateway_drainable(
                 gateway_running=gateway_running, gateway_state=gateway_state),
             "restart_drain_timeout": restart_drain_timeout, "active_sessions": active_sessions,
+            # This build binds a ``/api/ws?profile=<p>`` socket's RPCs to ``p``
+            # (``tui_gateway.rpc_dispatch._socket_profile_params``) and closes a deleted profile's
+            # live sessions, so ONE process can serve several local profiles. A client sharing a
+            # backend across profiles must see this first: an older runtime ignores the socket
+            # profile and would run every profile's RPCs in its launch home.
+            "socket_profile_default": True,
             **auth, "nous_session_valid": _nous_session_validity()}
 
         # Stable per-install identity (first call may touch disk). Omitted (not null) when

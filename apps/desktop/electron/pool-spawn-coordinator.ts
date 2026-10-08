@@ -420,3 +420,65 @@ export class LocalBackendSpawnCoordinator {
     this.#changed()
   }
 }
+
+export interface PoolSpawnSlotDeps {
+  coordinator: LocalBackendSpawnCoordinator
+  backoff: BackgroundSlotRetryBackoff
+  timeoutMs: number
+  signal: AbortSignal
+  maxBackends: () => number
+  log: (line: string) => void
+}
+
+/**
+ * Wait for one of the pool's `maxBackends` local spawn slots and record the
+ * lease on the entry; it is released when the child exits or the start is
+ * cancelled (`releaseLocalBackendSlot`).
+ */
+export async function acquirePoolSpawnSlot(
+  deps: PoolSpawnSlotDeps,
+  poolKey: string,
+  profile: string,
+  entry: LocalBackendSlotEntry,
+  spawnPriority: LocalBackendSpawnPriority
+): Promise<void> {
+  if (spawnPriority === 'background' && !deps.backoff.canAttempt(poolKey)) {
+    throw new BackgroundSlotRetryDeferredError(profile)
+  }
+
+  // The arbiter subscribes to the actual coordinator queue, so a later
+  // foreground promotion receives reclamation too, not just fresh starts.
+  const spawnRequest = deps.coordinator.request(poolKey, { timeoutMs: deps.timeoutMs, priority: spawnPriority })
+
+  entry.localBackendSlotKey = poolKey
+  entry.localBackendSpawnRequest = spawnRequest
+
+  if (spawnRequest.queued) {
+    deps.log(
+      `Profile backend "${profile}" waiting for a free local slot (${deps.coordinator.activeCount}/${deps.maxBackends()} busy, ${deps.coordinator.queuedCount} queued)`
+    )
+  }
+
+  const cancelRequest = (): void => {
+    spawnRequest.cancel()
+  }
+
+  deps.signal.addEventListener('abort', cancelRequest, { once: true })
+
+  try {
+    entry.releaseLocalBackendSlot = await spawnRequest.acquired
+    deps.backoff.clear(poolKey)
+  } catch (error) {
+    if (isBackgroundSlotWaitTimeout(error)) {
+      deps.backoff.recordFailure(poolKey)
+    }
+
+    throw error
+  } finally {
+    deps.signal.removeEventListener('abort', cancelRequest)
+  }
+
+  if (entry.localBackendSpawnRequest === spawnRequest) {
+    entry.localBackendSpawnRequest = null
+  }
+}

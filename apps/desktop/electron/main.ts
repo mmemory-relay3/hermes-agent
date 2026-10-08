@@ -437,9 +437,9 @@ import { clampPoolLimits, parsePoolLimits, POOL_LIMITS_DEFAULTS, POOL_LIMITS_MIN
 import { createPoolRetirer } from './pool-retire'
 import { createPoolRetirementClient } from './pool-retire-http'
 import {
+  acquirePoolSpawnSlot,
   assertPoolEntryStillOwned,
   BackgroundSlotRetryBackoff,
-  BackgroundSlotRetryDeferredError,
   isBackgroundSlotRetryDeferred,
   isBackgroundSlotWaitTimeout,
   LocalBackendSpawnCoordinator,
@@ -11213,7 +11213,8 @@ async function ensureRegistryBackend(
           logPoolSpawnFailure(label, error)
           await teardownFailedLocalBackend(key, entry)
         },
-        armReaper: startPoolIdleReaper
+        armReaper: startPoolIdleReaper,
+        fetchStatus: baseUrl => fetchPublicJson(`${baseUrl}/api/status`, { timeoutMs: 8_000 })
       },
       {
         profileKey,
@@ -12141,47 +12142,24 @@ async function runPoolBackendStart(
 
   assertPoolEntryStillOwned(poolKey, entry, backendPool, localBackendLifecycle.signal)
 
-  if (spawnPriority === 'background' && !backgroundSlotRetryBackoff.canAttempt(poolKey)) {
-    throw new BackgroundSlotRetryDeferredError(profile)
-  }
-
-  // The arbiter subscribes to the actual coordinator queue, so a later
-  // foreground promotion receives reclamation too, not just fresh starts.
-  const spawnRequest = localBackendSpawnCoordinator.request(poolKey, {
-    timeoutMs: POOL_SLOT_WAIT_MS,
-    priority: spawnPriority
-  })
-
-  entry.localBackendSlotKey = poolKey
-  entry.localBackendSpawnRequest = spawnRequest
-
-  if (spawnRequest.queued) {
-    rememberLog(
-      `Profile backend "${profile}" waiting for a free local slot (${localBackendSpawnCoordinator.activeCount}/${poolMaxBackends()} busy, ${localBackendSpawnCoordinator.queuedCount} queued)`
+  // The pinned local host is the "This device" backend itself, not an optional per-profile child:
+  // it takes no slot, so `maxBackends` stays the budget for the children it would otherwise starve
+  // (with maxBackends 1 a profile's unscopable mutation could never start).
+  if (!entry.pinned) {
+    await acquirePoolSpawnSlot(
+      {
+        coordinator: localBackendSpawnCoordinator,
+        backoff: backgroundSlotRetryBackoff,
+        timeoutMs: POOL_SLOT_WAIT_MS,
+        signal: localBackendLifecycle.signal,
+        maxBackends: poolMaxBackends,
+        log: rememberLog
+      },
+      poolKey,
+      profile,
+      entry,
+      spawnPriority
     )
-  }
-
-  const cancelRequest = (): void => {
-    spawnRequest.cancel()
-  }
-
-  localBackendLifecycle.signal.addEventListener('abort', cancelRequest, { once: true })
-
-  try {
-    entry.releaseLocalBackendSlot = await spawnRequest.acquired
-    backgroundSlotRetryBackoff.clear(poolKey)
-  } catch (error) {
-    if (isBackgroundSlotWaitTimeout(error)) {
-      backgroundSlotRetryBackoff.recordFailure(poolKey)
-    }
-
-    throw error
-  } finally {
-    localBackendLifecycle.signal.removeEventListener('abort', cancelRequest)
-  }
-
-  if (entry.localBackendSpawnRequest === spawnRequest) {
-    entry.localBackendSpawnRequest = null
   }
 
   assertPoolEntryStillOwned(poolKey, entry, backendPool, localBackendLifecycle.signal)

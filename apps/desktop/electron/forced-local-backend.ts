@@ -2,18 +2,24 @@
 // `forcedLocalBackend()` (host-backend-singleton.ts). Every profile joins the ONE pinned host
 // backend, scoped per socket/request; only escape hatches (isolated backend, unscopable REST
 // mutation) get a process of their own. The pinned host is never a passive-read refusal or an
-// LRU victim: it hosts every local profile's cron and bot work.
+// LRU victim, and holds no pool slot: it hosts every local profile's cron and bot work.
+//
+// Older runtimes ignore a socket's `?profile=` (they predate `socket_profile_default` in
+// /api/status) and would run every profile's RPCs in the host's launch home, so against one a
+// non-default profile keeps its own process homed at the profile, exactly as before.
 //
 // Dependency-injected so the join/spawn phase is testable without Electron; main.ts wires the
 // real pool, stopper, spawner and reaper.
 
-import { forcedLocalBackend, scopeHostDescriptor } from './host-backend-singleton'
+import { forcedLocalBackend, LOCAL_HOST_POOL_KEY, scopeHostDescriptor } from './host-backend-singleton'
 import type { LocalBackendSpawnPriority } from './pool-spawn-coordinator'
 
 export interface ForcedLocalPoolEntry {
   connectionPromise: null | Promise<any>
   lastActiveAt: number
   pinned?: boolean
+  /** The host's `/api/status.socket_profile_default`, read once per host generation. */
+  socketProfileDefault?: boolean
   [key: string]: unknown
 }
 
@@ -34,6 +40,8 @@ export interface ForcedLocalBackendDeps {
   ) => Promise<any>
   onSpawnFailure: (label: string, error: unknown, poolKey: string, entry: ForcedLocalPoolEntry) => Promise<void>
   armReaper: () => void
+  /** The public `/api/status` of a backend (rejects when unreachable). */
+  fetchStatus: (baseUrl: string) => Promise<any>
 }
 
 export interface ForcedLocalBackendRequest {
@@ -44,15 +52,46 @@ export interface ForcedLocalBackendRequest {
   unscopableRequest?: boolean
 }
 
+type Placement = ReturnType<typeof forcedLocalBackend>
+
 export async function ensureForcedLocalBackend(deps: ForcedLocalBackendDeps, req: ForcedLocalBackendRequest) {
   const local = forcedLocalBackend(req.profileKey, req.profilePoolKey, {
     isolated: deps.isolated,
     unscopableRequest: req.unscopableRequest
   })
 
-  const descriptorFor = async (connectionPromise: Promise<any>) =>
-    local.pinned ? scopeHostDescriptor(await connectionPromise, req.profileKey) : connectionPromise
+  if (!local.pinned) {
+    return joinOrSpawn(deps, req, local)
+  }
 
+  const host = await joinOrSpawn(deps, req, local)
+
+  // The host launches as `default`: its own home already scopes that profile on any runtime.
+  if (req.profileKey === 'default' || (await hostScopesSockets(deps, host))) {
+    return scopeHostDescriptor(host, req.profileKey)
+  }
+
+  return joinOrSpawn(deps, req, { pinned: false, poolKey: req.profilePoolKey, spawnProfile: req.profileKey })
+}
+
+async function hostScopesSockets(deps: ForcedLocalBackendDeps, host: { baseUrl?: string }): Promise<boolean> {
+  const entry = deps.pool.get(LOCAL_HOST_POOL_KEY)
+
+  if (typeof entry?.socketProfileDefault === 'boolean') {
+    return entry.socketProfileDefault
+  }
+
+  const status = await deps.fetchStatus(String(host.baseUrl || ''))
+  const supported = status?.socket_profile_default === true
+
+  if (entry) {
+    entry.socketProfileDefault = supported
+  }
+
+  return supported
+}
+
+async function joinOrSpawn(deps: ForcedLocalBackendDeps, req: ForcedLocalBackendRequest, local: Placement) {
   const stopping = deps.inFlightStop(local.poolKey)
 
   if (stopping) {
@@ -70,7 +109,7 @@ export async function ensureForcedLocalBackend(deps: ForcedLocalBackendDeps, req
       deps.promote(existing)
     }
 
-    return descriptorFor(existing.connectionPromise)
+    return existing.connectionPromise
   }
 
   if (!local.pinned) {
@@ -109,5 +148,5 @@ export async function ensureForcedLocalBackend(deps: ForcedLocalBackendDeps, req
   deps.pool.set(local.poolKey, entry)
   deps.armReaper()
 
-  return descriptorFor(connectionPromise)
+  return connectionPromise
 }

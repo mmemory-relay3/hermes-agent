@@ -1718,27 +1718,8 @@ def _stop_profile_backends(canon: str, profile_dir: Path) -> None:
 
 
 def _stop_bot_desktop(profile_dir: Path) -> None:
-    """Stop the profile's Bot Desktop (Xvnc + Xfce launcher) before its directory is removed or renamed;
-    gateway shutdown does not reach it (its own session, its own pid file). Scoped through the hermes-home
-    override so the runtime reads THIS profile's bot-desktop/ state, whichever profile invoked the op.
-    A failure here is logged, never fatal: the profile op is what the user asked for."""
-    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-    from tools.bot_desktop import runtime
-    if not runtime.is_supported_host():
-        return
-    token = set_hermes_home_override(profile_dir)
-    try:
-        if runtime.stop():
-            print("✓ Bot Desktop stopped")
-            # The screen a human's exclusion protected is gone; on rename the directory (lease.json
-            # included) moves with the profile, and a human lease for a dead viewer would fence the
-            # agent out of the renamed profile's next screen until someone force-released it.
-            from tools.bot_desktop import lease
-            lease.release()
-    except Exception as e:
-        logger.warning("Could not stop the Bot Desktop of %s: %s", profile_dir, e)
-    finally:
-        reset_hermes_home_override(token)
+    from hermes_cli.profiles_live_teardown import stop_bot_desktop
+    stop_bot_desktop(profile_dir)
 
 
 def _rmtree_make_writable(func, path, exc):
@@ -1869,6 +1850,8 @@ def delete_profile(name: str, yes: bool = False) -> Path:
     from hermes_constants import hermes_home_key
     from tools.mcp_tool_lifecycle import shutdown_mcp_servers
     shutdown_mcp_servers(scope=hermes_home_key(profile_dir))
+    from hermes_cli.profiles_live_teardown import close_live_sessions
+    close_live_sessions(profile_dir)
 
     # Release this process's holographic memory-store connections into the profile. The
     # Desktop's main serve process opens memory_store.db for every profile and is

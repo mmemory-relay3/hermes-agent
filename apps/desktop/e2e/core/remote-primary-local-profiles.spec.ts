@@ -257,3 +257,59 @@ test('remote primary: every local profile shares ONE pinned local backend, scope
     await provider.close()
   }
 })
+
+/**
+ * An older local runtime (set `HERMES_E2E_OLD_RUNTIME_ROOT` to a checkout that predates
+ * `socket_profile_default`) ignores a socket's `?profile=`. Sharing its backend would run every
+ * profile in `default`'s home, so a non-default profile keeps a backend of its own there.
+ */
+test('remote primary + older local runtime: a non-default profile keeps its own home', async () => {
+  const oldRoot = process.env.HERMES_E2E_OLD_RUNTIME_ROOT
+  test.skip(!oldRoot, 'HERMES_E2E_OLD_RUNTIME_ROOT not set')
+  test.setTimeout(300_000)
+  const provider = await startScriptedProvider()
+  const remoteBox = createCoreSandbox('rp-old-remote')
+  const clientBox = createCoreSandbox('rp-old-client')
+  writeProviderHome(remoteBox.hermesHome, provider.url)
+  writeProviderHome(clientBox.hermesHome, provider.url)
+  writeProviderHome(path.join(clientBox.hermesHome, 'profiles', 'reviewer'), provider.url)
+
+  const remote = await startRemoteBackend(remoteBox)
+  writeRemotePrimaryRegistry(clientBox.userDataDir, remote.url, remote.token)
+  const { app, page } = await launchCoreApp(coreAppEnv(clientBox, { HERMES_DESKTOP_HERMES_ROOT: oldRoot! }))
+
+  try {
+    await waitForInteractive(app, page)
+
+    const names = await page.evaluate(async () => {
+      const desktop = (window as any).hermesDesktop
+      const out: Record<string, string> = {}
+
+      for (const profile of ['default', 'reviewer']) {
+        await desktop.getConnectionFor({ connectionId: 'local', profile, priority: 'foreground' })
+        const minted = await desktop.getGatewayWsUrlFor({ connectionId: 'local', profile })
+        const sock = new WebSocket(minted.wsUrl)
+        await new Promise(resolve => (sock.onopen = resolve))
+        out[profile] = await new Promise(resolve => {
+          sock.addEventListener('message', ev => {
+            const msg = JSON.parse(String(ev.data))
+
+            if (msg.id === 'c') {
+              resolve(String(msg.result?.info?.profile_name ?? msg.error?.message))
+            }
+          })
+          sock.send(JSON.stringify({ jsonrpc: '2.0', id: 'c', method: 'session.create', params: { cols: 80 } }))
+        })
+      }
+
+      return out
+    })
+
+    expect(names).toEqual({ default: 'default', reviewer: 'reviewer' })
+    expect(backendProcesses(clientBox), 'default host + reviewer’s own backend').toHaveLength(2)
+  } finally {
+    await app.close().catch(() => undefined)
+    await remote.kill()
+    await provider.close()
+  }
+})
