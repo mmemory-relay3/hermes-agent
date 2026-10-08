@@ -20,6 +20,13 @@ runtime on the minimal runner image. The publisher installs pinned AWS CLI
 Hermes runtime image. External fork PRs use GitHub's native `ubuntu-24.04-arm`
 runner instead.
 
+The build retains full commit/tag history for canonical version distance but
+uses a blob-filtered checkout to avoid downloading unrelated historical file
+contents. Native ARM64 builds use Docker's integrated BuildKit driver, avoiding
+a second container/layer cache on the existing runner nodes' 20 GB root disks.
+This workflow does not change the shared node class, disk size or runner Pod
+template.
+
 The shared group's repository access is explicitly selected: all previously
 allowed private repositories plus this public fork. Other public repositories
 are not allowed, and newly created repositories require an explicit addition.
