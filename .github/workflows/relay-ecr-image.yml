@@ -19,7 +19,9 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm
+    # Keep external fork code off ARC in this workflow. Repository policy also
+    # requires approval for every external contributor (including repeat ones).
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04-arm' || 'arc-runner-dev' }}
     timeout-minutes: 120
     outputs:
       commit: ${{ steps.identity.outputs.commit }}
@@ -32,6 +34,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
       - name: Identify the actual checkout, not a synthetic PR merge commit
         id: identity
         run: |
@@ -71,7 +76,7 @@ jobs:
       github.repository == 'mmemory-relay3/hermes-agent' &&
       github.event_name == 'workflow_dispatch' && inputs.publish &&
       github.ref == 'refs/heads/relay/custom-patches-20261008'
-    runs-on: ubuntu-24.04-arm
+    runs-on: arc-runner-dev
     timeout-minutes: 30
     permissions:
       contents: read
@@ -80,6 +85,14 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Install the pinned AWS CLI on the ephemeral ARM64 runner
+        uses: ankurk91/install-aws-cli-action@0fb979b120154f052f17f78d69809c31e3d26367 # v1
+        with:
+          version: '2.37.10'
+          cache: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: relay-hermes-tested-image

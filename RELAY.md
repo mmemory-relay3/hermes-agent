@@ -8,12 +8,31 @@ source. There is no source lock or patch replay in GitOps.
 ## GitHub Actions
 
 Use **Relay Hermes image** (`.github/workflows/relay-ecr-image.yml`). PRs to the
-custom branch validate every source change without AWS credentials.
+custom branch validate every source change without requesting an OIDC token.
 Manual runs build the selected checkout; `publish` defaults to false.
 Publication is allowed only from the custom branch in this repository.
 
-The build uses GitHub's native `ubuntu-24.04-arm` runner. Existing ARC runner
-groups do not allow this public fork, and their settings are not changed.
+Internal PRs and manual builds/publication use the existing ARM64
+`arc-runner-dev` scale set in the shared `k8s-arc` runner group. Python 3.12 is
+set up explicitly, and the publisher installs pinned AWS CLI 2.37.10 on its
+ephemeral runner. External fork PRs use GitHub's native `ubuntu-24.04-arm`
+runner instead.
+
+The shared group's repository access is explicitly selected: all previously
+allowed private repositories plus this public fork. Other public repositories
+are not allowed, and newly created repositories require an explicit addition.
+This repository's fork-PR policy requires approval for **all external
+contributors**, including repeat contributors. These are GitHub settings, not
+properties of the workflow YAML; keep them configured when restoring/moving CI.
+
+The shared runner retains its existing AWS Pod Identity and privileged Docker.
+Not requesting OIDC does not make its host credential-free. External PR runner
+routing in YAML is not a security boundary: a proposed workflow change can
+alter it. Review external PR workflow/code changes before approving any run.
+The shared group's workflow access is not globally restricted, preserving the
+existing private repositories' workflows. No new runner group, scale set or
+shared IAM policy is created.
+
 Set the repository variable `AWS_ECR_PUBLISH_ROLE_ARN` to:
 
 ```text
@@ -76,7 +95,8 @@ digest/Actions link in the deployment PR. Change only `image.tag` in the
 GitOps `dev/apps/relay-hermes/values.yaml` and mirrored prod values. The dev
 Application remains retired. Merge the reviewed GitOps PR, then separately
 authorize a manual prod Argo CD sync. This workflow never writes to GitOps,
-merges a PR, syncs Argo CD or starts/stops Kubernetes workloads.
+merges a PR, syncs Argo CD or starts/stops application workloads. ARC creates
+and removes ephemeral CI runner Pods automatically.
 
 Preserve the existing PVC, Secret/ExternalSecret and `bootstrap.overwrite: false`.
 OAuth tokens and MCP settings live in the runtime PVC, not this image. Validate
