@@ -1,0 +1,105 @@
+name: Relay Hermes image
+
+on:
+  pull_request:
+    branches: [relay/custom-patches-20261008]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the tested image to ECR (trusted custom branch only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relay-hermes-image-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    outputs:
+      commit: ${{ steps.identity.outputs.commit }}
+    env:
+      HERMES_TEST_WORKERS: '2'
+      PUBLISH_IMAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Identify the actual checkout, not a synthetic PR merge commit
+        id: identity
+        run: |
+          commit=$(git rev-parse HEAD)
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "RELAY_IMAGE_TAG=$(date -u +%Y%m%d).${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.${commit:0:10}.prod" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Prepare PM test environment, test, build ARM64, and verify containers
+        run: |
+          export HERMES_HOME="$RUNNER_TEMP/relay-ci-home"
+          export HERMES_RUNTIME_DIR="$RUNNER_TEMP/relay-ci-tools"
+          set +euo pipefail
+          source ./activate --test-extras all,slack --
+          activated=$?
+          set -euo pipefail
+          test "$activated" -eq 0
+          export HERMES_PYTHON="$__HERMES_TEST_PYTHON"
+          unset __HERMES_ACTIVATED
+          archive_args=()
+          if [ "$PUBLISH_IMAGE" = "true" ]; then
+            archive_args=(--archive "$RUNNER_TEMP/relay-image/hermes-image.tar.gz")
+          fi
+          python3 scripts/ci/build_relay_image.py build \
+            --tag "$RELAY_IMAGE_TAG" \
+            --receipt "$RUNNER_TEMP/relay-image/receipt.json" "${archive_args[@]}"
+      - name: Retain build evidence and the tested image when publication is requested
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: relay-hermes-tested-image
+          path: ${{ runner.temp }}/relay-image/
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    needs: build
+    if: >-
+      github.repository == 'mmemory-relay3/hermes-agent' &&
+      github.event_name == 'workflow_dispatch' && inputs.publish &&
+      github.ref == 'refs/heads/relay/custom-patches-20261008'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: relay-hermes-tested-image
+          path: ${{ runner.temp }}/relay-image/
+      - name: Obtain short-lived AWS credentials (no static key)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ECR_PUBLISH_ROLE_ARN }}
+          aws-region: ap-northeast-2
+      - name: Verify the archive and publish without rebuilding
+        env:
+          EXPECTED_COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          python3 scripts/ci/build_relay_image.py publish \
+            --expected-commit "$EXPECTED_COMMIT" \
+            --receipt "$RUNNER_TEMP/relay-image/receipt.json" \
+            --archive "$RUNNER_TEMP/relay-image/hermes-image.tar.gz"
+      - name: Retain the published digest and validation receipt
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: relay-hermes-published-receipt
+          path: ${{ runner.temp }}/relay-image/receipt.json
+          retention-days: 90
