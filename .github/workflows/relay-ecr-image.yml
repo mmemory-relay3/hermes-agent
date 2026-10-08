@@ -21,7 +21,7 @@ jobs:
   build:
     # Keep external fork code off ARC in this workflow. Repository policy also
     # requires approval for every external contributor (including repeat ones).
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04-arm' || 'arc-runner-dev' }}
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-24.04-arm' || 'arc-runner-prod' }}
     timeout-minutes: 120
     outputs:
       commit: ${{ steps.identity.outputs.commit }}
@@ -34,7 +34,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           # Retain complete commit/tag history for canonical version distance,
-          # but fetch file contents only for the checkout on ARC's small disk.
+          # but fetch file contents only for the checkout on the ephemeral disk.
           filter: blob:none
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -87,7 +87,7 @@ jobs:
       github.repository == 'mmemory-relay3/hermes-agent' &&
       github.event_name == 'workflow_dispatch' && inputs.publish &&
       github.ref == 'refs/heads/relay/custom-patches-20261008'
-    runs-on: arc-runner-dev
+    runs-on: arc-runner-prod
     timeout-minutes: 30
     permissions:
       contents: read

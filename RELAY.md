@@ -13,19 +13,21 @@ Manual runs build the selected checkout; `publish` defaults to false.
 Publication is allowed only from the custom branch in this repository.
 
 Internal PRs and manual builds/publication use the existing ARM64
-`arc-runner-dev` scale set in the shared `k8s-arc` runner group. Python 3.12 is
+`arc-runner-prod` scale set in the shared `k8s-arc` runner group. Python 3.12 is
 set up explicitly; self-hosted builds install `libatomic1` for PM's ARM64 Node
 runtime on the minimal runner image. The publisher installs pinned AWS CLI
 2.37.10 on its ephemeral runner. These CI-only dependencies do not modify the
 Hermes runtime image. External fork PRs use GitHub's native `ubuntu-24.04-arm`
 runner instead.
 
-The build retains full commit/tag history for canonical version distance but
-uses a blob-filtered checkout to avoid downloading unrelated historical file
-contents. Native ARM64 builds use Docker's integrated BuildKit driver, avoiding
-a second container/layer cache on the existing runner nodes' 20 GB root disks.
-This workflow does not change the shared node class, disk size or runner Pod
-template.
+The existing prod ARM64 runner nodes have 50 GB root disks; dev's 20 GB nodes
+were evicted during this image build, even after reducing disk use. Lightweight
+GitOps deployment validation still uses `arc-runner-dev`. The image build
+retains full commit/tag history for canonical version distance but uses a
+blob-filtered checkout to avoid downloading unrelated historical file contents.
+Native ARM64 builds use Docker's integrated BuildKit driver, avoiding a second
+container/layer cache. This workflow does not change the shared node class,
+disk size or runner Pod template.
 
 The shared group's repository access is explicitly selected: all previously
 allowed private repositories plus this public fork. Other public repositories
