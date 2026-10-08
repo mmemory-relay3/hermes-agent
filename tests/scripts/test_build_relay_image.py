@@ -16,7 +16,7 @@ def source(tmp_path):
     for args in (("init", "--quiet"), ("config", "user.name", "Image fixture"),
                  ("config", "user.email", "fixture@example.invalid"), ("config", "commit.gpgSign", "false")):
         release.git(root, *args)
-    (root / "app.txt").write_text("tracked source\n")
+    (root / "app.txt").write_text("tracked source\n", encoding="utf-8")
     release.git(root, "add", "app.txt")
     release.git(root, "commit", "--quiet", "-m", "fixture")
     return root
@@ -24,16 +24,16 @@ def source(tmp_path):
 
 def test_archive_uses_git_objects_not_local_credentials(source, tmp_path):
     identity = release.source_identity(source)
-    (source / ".env").write_text("SYNTHETIC_SECRET=must-not-ship\n")
+    (source / ".env").write_text("SYNTHETIC_SECRET=must-not-ship\n", encoding="utf-8")
     (source / "mcp-tokens").mkdir()
-    (source / "mcp-tokens/client.json").write_text("synthetic fixture, not credentials")
+    (source / "mcp-tokens/client.json").write_text("synthetic fixture, not credentials", encoding="utf-8")
     context = tmp_path / "context"
     release.tracked_context(source, context)
-    assert (context / "app.txt").read_text() == "tracked source\n"
+    assert (context / "app.txt").read_text(encoding="utf-8-sig") == "tracked source\n"
     assert not (context / ".env").exists()
     assert not (context / "mcp-tokens").exists()
     assert release.source_identity(source) == identity
-    (source / "app.txt").write_text("uncommitted change\n")
+    (source / "app.txt").write_text("uncommitted change\n", encoding="utf-8")
     with pytest.raises(ValueError, match="Commit tracked"):
         release.source_identity(source)
 
@@ -44,20 +44,21 @@ def receipt(tmp_path):
             "platform": release.PLATFORM, "oauth_tests_passed": True, "slack_tests_passed": True,
             "docker_tests_passed": True, "published": False}
     path = tmp_path / "receipt.json"
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data), encoding="utf-8")
     return path, data
 
 
 def test_receipt_requires_the_approved_commit_and_all_passing_suites(receipt):
     path, data = receipt
+    path.write_bytes(b"\xef\xbb\xbf" + json.dumps(data).encode("utf-8"))
     assert release.verified_receipt(path, data["commit"]) == data
     with pytest.raises(ValueError, match="approved build"):
         release.verified_receipt(path, "c" * 40)
     for key in ("oauth_tests_passed", "slack_tests_passed", "docker_tests_passed"):
-        path.write_text(json.dumps({**data, key: False}))
+        path.write_text(json.dumps({**data, key: False}), encoding="utf-8")
         with pytest.raises(ValueError, match=key):
             release.verified_receipt(path, data["commit"])
-    path.write_text(json.dumps({**data, "published": True}))
+    path.write_text(json.dumps({**data, "published": True}), encoding="utf-8")
     with pytest.raises(ValueError, match="already been published"):
         release.verified_receipt(path, data["commit"])
 
@@ -67,7 +68,7 @@ def test_moving_tags_and_unexpected_repository_are_rejected(receipt):
         with pytest.raises(ValueError):
             release.image_reference(tag)
     path, data = receipt
-    path.write_text(json.dumps({**data, "image": "other.example/hermes:release"}))
+    path.write_text(json.dumps({**data, "image": "other.example/hermes:release"}), encoding="utf-8")
     with pytest.raises(ValueError, match="Unexpected ECR"):
         release.verified_receipt(path, data["commit"])
 
@@ -89,7 +90,7 @@ def test_changed_archive_is_rejected_before_loading_or_publishing(receipt, tmp_p
     path, data = receipt
     archive = tmp_path / "image.tar.gz"
     archive.write_bytes(b"original synthetic archive")
-    path.write_text(json.dumps({**data, "archive_sha256": release.sha256(archive)}))
+    path.write_text(json.dumps({**data, "archive_sha256": release.sha256(archive)}), encoding="utf-8")
     archive.write_bytes(b"changed synthetic archive")
     with patch.object(release, "ensure_unpublished"), patch.object(release, "run") as invoked:
         with pytest.raises(ValueError, match="checksum mismatch"):

@@ -38,7 +38,8 @@ DOCKER_TESTS = (
 
 def run(args, *, cwd=None, env=None, capture=False, input=None):
     return subprocess.run([str(arg) for arg in args], cwd=cwd, env=env, input=input,
-        check=True, text=True, stdout=subprocess.PIPE if capture else None).stdout
+        check=True, text=True, encoding="utf-8", errors="replace",
+        stdout=subprocess.PIPE if capture else None).stdout
 
 
 def git(source, *args):
@@ -152,12 +153,12 @@ def build(source, tag, receipt, archive=None):
         if archive is not None:
             result["archive_sha256"] = export_image(image, archive)
         receipt.parent.mkdir(parents=True, exist_ok=True)
-        receipt.write_text(json.dumps(result, indent=2) + "\n")
+        receipt.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         return result
 
 
 def verified_receipt(receipt, expected_commit):
-    result = json.loads(receipt.read_text())
+    result = json.loads(receipt.read_text(encoding="utf-8-sig"))
     if not re.fullmatch(r"[a-f0-9]{40}", expected_commit) or result.get("commit") != expected_commit:
         raise ValueError("Receipt commit differs from the approved build")
     if not re.fullmatch(r"[a-f0-9]{40}", result.get("tree", "")) or result.get("platform") != PLATFORM:
@@ -177,7 +178,8 @@ def ensure_unpublished(image):
     tag = image.rsplit(":", 1)[1]
     args = ["aws", "ecr", "describe-images", "--region", REGION, "--repository-name", "relay-hermes",
             "--image-ids", "imageTag=" + tag, "--output", "json"]
-    checked = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    checked = subprocess.run(args, text=True, encoding="utf-8", errors="replace",
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if checked.returncode == 0:
         raise FileExistsError("ECR tag already exists; choose a new immutable release tag")
     if "ImageNotFoundException" not in checked.stderr:
@@ -199,7 +201,7 @@ def publish(receipt, expected_commit, archive=None):
         "--repository-name", "relay-hermes", "--image-ids", "imageTag=" + result["image"].rsplit(":", 1)[1],
         "--query", "imageDetails[0]", "--output", "json"], capture=True))
     result.update(published=True, digest=details["imageDigest"], size_bytes=details["imageSizeInBytes"])
-    receipt.write_text(json.dumps(result, indent=2) + "\n")
+    receipt.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     return result
 
 
