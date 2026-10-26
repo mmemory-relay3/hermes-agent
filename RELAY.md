@@ -5,6 +5,11 @@ deployment configuration. The custom application fixes remain on
 `relay/custom-patches-20261008`; the upstream-tracking `main` is not the release
 source. There is no source lock or patch replay in GitOps.
 
+The current upstream baseline is `v0.22.5`
+(`bf0203a794a07aac3ff764972ab9087baa4e4f4e`). Merge the upstream release
+history while retaining all seven OAuth/Slack fixes and the Relay build pipeline.
+Keep the upstream Dockerfile, dependency lock and SDK-compatible test fixtures.
+
 ## GitHub Actions
 
 Use **Relay Hermes image** (`.github/workflows/relay-ecr-image.yml`). PRs to the
