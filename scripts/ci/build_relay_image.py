@@ -38,7 +38,7 @@ DOCKER_TESTS = (
 
 def run(args, *, cwd=None, env=None, capture=False, input=None):
     return subprocess.run([str(arg) for arg in args], cwd=cwd, env=env, input=input,
-        check=True, text=True, encoding="utf-8", errors="replace",
+        check=True, timeout=5400, text=True, encoding="utf-8", errors="replace",
         stdout=subprocess.PIPE if capture else None).stdout
 
 
@@ -62,13 +62,14 @@ def image_reference(tag):
 def tracked_context(source, destination):
     """Export Git objects; untracked credentials and local virtualenvs stay out."""
     destination.mkdir()
-    archive = subprocess.Popen(["git", "-C", str(source), "archive", "--format=tar", "HEAD"],
+    archive = subprocess.Popen(  # health: allow HX006 -- Producer streams to bounded tar; Popen has no timeout argument.
+                               ["git", "-C", str(source), "archive", "--format=tar", "HEAD"],
                                stdout=subprocess.PIPE)
     try:
-        subprocess.run(["tar", "-x", "-C", str(destination)], stdin=archive.stdout, check=True)
+        subprocess.run(["tar", "-x", "-C", str(destination)], stdin=archive.stdout, check=True, timeout=300)
     finally:
         archive.stdout.close()
-        if archive.wait() != 0:
+        if archive.wait(timeout=60) != 0:
             raise RuntimeError("Git archive failed")
 
 
@@ -95,13 +96,14 @@ def sha256(path):
 
 def export_image(image, archive):
     archive.parent.mkdir(parents=True, exist_ok=True)
-    saved = subprocess.Popen(["docker", "save", image], stdout=subprocess.PIPE)
+    saved = subprocess.Popen(  # health: allow HX006 -- Binary image stream feeds gzip; CI bounds the entire build/export.
+        ["docker", "save", image], stdout=subprocess.PIPE)
     try:
         with gzip.open(archive, "wb") as output:
             shutil.copyfileobj(saved.stdout, output)
     finally:
         saved.stdout.close()
-        if saved.wait() != 0:
+        if saved.wait(timeout=60) != 0:
             raise RuntimeError("Docker image export failed")
     return sha256(archive)
 
@@ -179,7 +181,7 @@ def ensure_unpublished(image):
     args = ["aws", "ecr", "describe-images", "--region", REGION, "--repository-name", "relay-hermes",
             "--image-ids", "imageTag=" + tag, "--output", "json"]
     checked = subprocess.run(args, text=True, encoding="utf-8", errors="replace",
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                             capture_output=True, check=False, timeout=60)
     if checked.returncode == 0:
         raise FileExistsError("ECR tag already exists; choose a new immutable release tag")
     if "ImageNotFoundException" not in checked.stderr:

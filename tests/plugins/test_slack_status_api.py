@@ -62,3 +62,15 @@ async def test_completion_clears_the_same_thread_with_agent_sessions_sdk(adapter
         "channel_id": "C_TEST", "thread_ts": "123.456", "status": "",
     }
     assert not adapter._active_status_threads
+
+
+@pytest.mark.asyncio
+async def test_thread_titles_use_agent_sessions_rename(adapter):
+    adapter, client = adapter
+    adapter.config.extra["assistant_thread_titles"] = True
+
+    await adapter._set_assistant_thread_title("D_TEST", "123.456", "Summarize the incident")
+
+    assert client.calls == [("agents.sessions.rename", {
+        "channel_id": "D_TEST", "thread_ts": "123.456", "title": "Summarize the incident",
+    })]

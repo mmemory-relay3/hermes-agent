@@ -144,7 +144,7 @@ async def test_other_issuer_shapes_are_still_rejected(tmp_path, monkeypatch, iss
 # The same URI after RFC 3986 §6.2.3 scheme-based normalization, so it must complete (#89412).
 @pytest.mark.asyncio
 async def test_root_identifier_with_trailing_slash_completes_the_flow(tmp_path, monkeypatch):
-    response, standin, seen, provider = await _run_flow(
+    response, _standin, seen, provider = await _run_flow(
         tmp_path, monkeypatch, {ROOT_DOC: _asm(AS_ORIGIN)}, advertised=f"{AS_ORIGIN}/")
 
     assert response.status_code == 200

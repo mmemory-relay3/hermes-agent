@@ -289,6 +289,7 @@ class HermesMCPOAuthProvider(HermesProviderMixin, *_SDK_BASES):
                     try:
                         no_valid_token = not self.context.is_token_valid()
                     except Exception:  # pragma: no cover — defensive: context not ready
+                        logger.debug("OAuth token validity probe failed before reauthorization", exc_info=True)
                         no_valid_token = True
                     if no_valid_token and getattr(incoming, "status_code", None) != 401:
                         # The SDK's httpx flavour (httpx2 under mcp 2.0), bound to the request:
